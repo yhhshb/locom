@@ -1,0 +1,48 @@
+package dnacsf;
+
+import java.io.IOException;
+import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.io.File;
+import java.io.FileReader;
+import java.io.BufferedReader;
+
+import it.unimi.dsi.fastutil.longs.LongArrayList;
+import it.unimi.dsi.bits.TransformationStrategies;
+import it.unimi.dsi.sux4j.mph.GV3CompressedFunction;
+
+public class CSFTest
+{
+    public static void main( String[] args ) throws IOException, RuntimeException
+    {
+        if (args.length < 2) throw new RuntimeException("Too few arguments");
+
+        ArrayList<String> keys = new ArrayList<String>();
+        LongArrayList labels = new LongArrayList();
+        File file = new File(args[0]);
+        try(BufferedReader br = new BufferedReader(new FileReader(file))){
+            String line;
+            while((line = br.readLine()) != null){
+                if(line.length() > 0) {
+                    String[] vals = line.strip().split(" ");
+                    if(vals.length != 2) {
+                        throw new RuntimeException("Unable to split line");
+                    }
+                    keys.add(vals[0]);
+                    labels.add(Long.parseLong(vals[1]));
+                    //System.err.printf("vals[0] = %s | vals[1] = %s\n", vals[0], vals[1]);
+                }
+            }
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        final GV3CompressedFunction.Builder<CharSequence> mmfBuilder = new GV3CompressedFunction.Builder<CharSequence>();
+        mmfBuilder.keys(keys);
+        mmfBuilder.transform(TransformationStrategies.utf16());
+        mmfBuilder.values(labels);
+        GV3CompressedFunction<CharSequence> function = mmfBuilder.build();
+        function.dump(args[1]);
+    }
+}
