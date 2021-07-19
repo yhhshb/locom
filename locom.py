@@ -16,11 +16,13 @@ from kmer import smart_numeric_cast #quick hack
 from readfq import readfq
 from ZipfGenerator import ZipfGenerator
 
-parent = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+pwd = os.path.dirname(os.path.realpath(__file__))
+parent = os.path.dirname(pwd)
+
 GV3 = "Sux4JTest/target/Sux4JTest-0.0.1-jar-with-dependencies.jar"
 TT3 = "GV3/test_locom_speed"
-jar_exec = os.path.join(parent, GV3)
-speed_exec = os.path.join(parent, TT3)
+jar_exec = os.path.join(pwd, GV3)
+speed_exec = os.path.join(pwd, TT3)
 
 def run_GOV3(ifile: str, ofile: str):
     out = subprocess.run(["java", "-jar", jar_exec, ifile, ofile], stdout = subprocess.PIPE, stderr = sys.stderr)
@@ -44,6 +46,7 @@ def isempty(file: str):
         write_header = True
     return write_header
 
+policies = ["minimum", "majority"]
 
 #------------------------------------------------------------------------------------------------------------
 
@@ -59,6 +62,47 @@ def count_main(args):
     if (args.o): fd = open(args.o, "w")
     else: fd = sys.stdout
     for k, v in table.items(): fd.write("{} {}\n".format(k, v))
+    fd.close()
+
+def countpa_main(args):
+    import gzip
+    assert(len(args.input) < 63)
+    df_table = dict()
+    i = 0
+    for fxfile in args.input:
+        if (fxfile and fxfile.endswith(".gz")): fd = gzip.open(fxfile, "rt")
+        elif fxfile: fd = open(fxfile, "r")
+        else: raise ValueError("stdin input not supported")
+        dummy_table = dict()
+        for _, seq, _ in readfq(fd): kmer.count(dummy_table, args.k, seq, False)
+        fd.close()
+        for km, _ in dummy_table.items():
+            paval = int(2**i)
+            if km in df_table and df_table[km] < paval: df_table[km] += paval
+            else: df_table[km] = paval
+        i += 1
+    if (args.output): fd = open(args.output, "w")
+    else: fd = sys.stdout
+    for k, v in df_table.items(): fd.write("{} {}\n".format(k, v))
+    fd.close()
+
+def countdf_main(args):
+    import gzip
+    assert(len(args.input) < 63)
+    df_table = dict()
+    for fxfile in args.input:
+        if (fxfile and fxfile.endswith(".gz")): fd = gzip.open(fxfile, "rt")
+        elif fxfile: fd = open(fxfile, "r")
+        else: raise ValueError("stdin input not supported")
+        dummy_table = dict()
+        for _, seq, _ in readfq(fd): kmer.count(dummy_table, args.k, seq, False)
+        fd.close()
+        for km, _ in dummy_table.items():
+            if km in df_table: df_table[km] += 1
+            else: df_table[km] = 1
+    if (args.output): fd = open(args.output, "w")
+    else: fd = sys.stdout
+    for k, v in df_table.items(): fd.write("{} {}\n".format(k, v))
     fd.close()
 
 def histo_main(args):
@@ -260,7 +304,7 @@ def csf_compress(table_name: str, csf_basename: str, sep: str, seed: int, bloom_
     if not spectrum:
         spectrum = kmer.Spectrum()
         spectrum.addFromFile(table_name, sep)
-    if spectrum.empty(): return 0, []
+    if spectrum.empty(): return 0, 0, [], None
 
     gen = random.Random()
     gen.seed(seed)
@@ -325,7 +369,7 @@ def csf_compress(table_name: str, csf_basename: str, sep: str, seed: int, bloom_
     if cleanup: os.remove(csf_name)
     #sys.stderr.write("Effective number of bloom filters: {} | CSF size: {}\n".format(layer_index, csf_size))
     #sys.stderr.write("bloom filter memory = {}, CSF memory = {}\n".format(blf_total_memory, csf_size))
-    return csf_size + blf_total_memory, heavy_elements
+    return blf_total_memory, csf_size, heavy_elements, epsilon
 
 def build_main(args):
     """Compress a k-mer counting table by frequency locality and CSF
@@ -356,7 +400,8 @@ def build_main(args):
                 else: L0, sp = build_bucket_layer(temp_input_table_name, bucket_table_name, temp_output_table_name, args.sep, m, args.delta, mmhash, args.majority, None)
                 norms.append(L0)
                 #sys.stderr.write("m = {}: ".format(m))
-                bucket_size, hel = csf_compress(bucket_table_name, args.output + ".m{}".format(m) if args.output else None, args.sep, args.seed, args.opt_layers, sp)
+                blf_total_memory, csf_size, hel, _ = csf_compress(bucket_table_name, args.output + ".m{}".format(m) if args.output else None, args.sep, args.seed, args.opt_layers, sp)
+                bucket_size = blf_total_memory + csf_size
                 remelem.append(hel)
                 if not args.keep:
                     os.remove(bucket_table_name)
@@ -380,7 +425,8 @@ def build_main(args):
     sp.addFromFile(final_table_name, args.sep)
     nofk = norms[0] if norms else sp.L0Norm()
     #sys.stderr.write("difference layer: ")
-    final_table_size, hel = csf_compress(final_table_name, args.output, args.sep, args.seed, args.bloom_layers, sp)#NOTE: sp is passed by REFERENCE (because, ugh, python). csf_compress() could modify the histogram
+    blf_total_memory, csf_size, hel, _ = csf_compress(final_table_name, args.output, args.sep, args.seed, args.bloom_layers, sp)#NOTE: sp is passed by REFERENCE (because, ugh, python). csf_compress() could modify the histogram
+    final_table_size = blf_total_memory + csf_size
     remelem.append(hel)
     if not args.keep and final_table_name != args.input: os.remove(final_table_name)
 
@@ -491,10 +537,193 @@ def test_speed_main(args):
     for line in io.TextIOWrapper(proc.stderr, encoding="utf-8"):
         dmin, davg, dmax = line.strip().split(',')
         sys.stderr.write("{},{},{}\n".format(int(dmin), round(float(davg), 2), int(dmax)))
-        
+
+def test_mm_bucketing(args):
+    MINIMUM = policies[0]
+    MAJORITY = policies[1]
+    hasher = pyhash.xx_64(args.seed)
+    if args.policy == MINIMUM: barray = MinBucketArray(0)
+    elif args.policy == MAJORITY: barray = MajorityBucketArray(math.inf)
+    else: raise ValueError("Error: unrecognized policy")
+    input_spectrum = kmer.Spectrum()
+    with open(args.input, "r") as ith:
+        for line in ith:
+            km, count = line.split(args.sep)
+            mm = kmer.minimizer(args.minimizer, km, hasher)
+            count = int(count)
+            input_spectrum.add(count)
+            barray.add(count, mm)
+    if args.dump:
+        with open(args.dump, "w") as dh:
+            for mm, counts in barray.buckets.items():
+                dh.write("{} -> {}\n".format(mm, counts))
+    barray.finalize()
+    bucket_spectrum = kmer.Spectrum()
+    for _, bval in barray.buckets.items(): bucket_spectrum.add(bval)
+    passing_spectrum = kmer.Spectrum()
+    ambiguous_minimizers = set()
+    with open(args.input, "r") as ith:
+        for line in ith:
+            km, count = line.split(args.sep)
+            mm = kmer.minimizer(args.minimizer, km, hasher)
+            count = int(count)
+            estimate = barray.buckets[mm]
+            if(count != estimate):#k-mer pass to the next layer
+                passing_spectrum.add(count-estimate)
+                ambiguous_minimizers.add(mm)
+
+    total_number_of_kmers = input_spectrum.L0Norm()
+    input_entropy = input_spectrum.entropy()
+    number_of_buckets = number_of_minimizers = bucket_spectrum.L0Norm()
+    number_of_ambiguous_buckets = number_of_ambiguous_minimizers = len(ambiguous_minimizers)
+    bucket_entropy = bucket_spectrum.entropy()
+    first_csf_be_size = estimate_csf_space(bucket_entropy)
+    first_csf_bit_size = first_csf_be_size * number_of_buckets
+    total_number_of_passing_kmers = passing_spectrum.L0Norm()
+    passing_entropy = passing_spectrum.entropy()
+    sys.stdout.write("Method: --> ")
+    if args.policy == MINIMUM: sys.stdout.write("AMB")
+    elif args.policy == MAJORITY: sys.stdout.write("FIL")
+    sys.stdout.write(' <--\n')
+    sys.stdout.write("Total number of k-mers (n): {}\n".format(total_number_of_kmers))
+    sys.stdout.write("\twith entropy: {}\n".format(round(input_entropy, 5)))
+    sys.stdout.write("Number of buckets (minimizers): {}\n".format(number_of_buckets))
+    sys.stdout.write("\tof which ambiguous: {}\n".format(number_of_ambiguous_buckets))
+    sys.stdout.write("\twith entropy: {}\n".format(round(bucket_entropy, 5)))
+    sys.stdout.write("Estimated size of first CSF: {} bits/element (= {} bits in total)\n".format(round(first_csf_be_size, 4), round(first_csf_bit_size, 2)))
+    sys.stdout.write("Number of propagated k-mers by the first bucket array (p): {} (number of filtered k-mers (n-p): {})\n".format(total_number_of_passing_kmers, total_number_of_kmers - total_number_of_passing_kmers))
+    sys.stdout.write("\twith entropy: {}\n".format(round(passing_entropy, 5)))
+    il_blf_bit_size = 0
+    if args.policy == MAJORITY:
+        alpha = (total_number_of_kmers - total_number_of_passing_kmers) / total_number_of_kmers
+        il_bf_epsilon = (1.0 - alpha) / alpha
+        il_blf = bloom.BloomFilter(total_number_of_passing_kmers, il_bf_epsilon, random.Random(), pyhash.xx_64)
+        il_blf_bit_size = il_blf.getBytesMemory() * 8
+        approx_passing_kmers = total_number_of_passing_kmers + (total_number_of_kmers - total_number_of_passing_kmers) * il_bf_epsilon
+        passing_spectrum.histogram[0] = int((total_number_of_kmers - total_number_of_passing_kmers) * il_bf_epsilon)
+        total_number_of_passing_kmers = passing_spectrum.L0Norm()
+        passing_entropy = passing_spectrum.entropy()
+        #for count, column in input_spectrum.histogram.items():
+        #    to_add = round(column * il_bf_epsilon)
+        #    if to_add > 0:
+        #        if count in passing_spectrum.histogram: passing_spectrum.histogram[count] += to_add
+        #        else: passing_spectrum.histogram[count] = to_add
+        sys.stdout.write("alpha = {}{}\n".format(round(alpha, 4), "" if alpha >= 0.5 else " (Warning, alpha < 0.5)"))
+        sys.stdout.write("epsilon = {}\n".format(il_bf_epsilon))
+        sys.stdout.write("bloom filter size = {}\n".format(il_blf_bit_size))
+        #sys.stdout.write("[DEBUG] ({}, {})\n".format(approx_passing_kmers, total_number_of_kmers - approx_passing_kmers))
+        sys.stdout.write("Number of propagated k-mers by the bloom filter = {} (number of filtered k-mers by bloom filter = {})\n".format(total_number_of_passing_kmers, total_number_of_kmers - total_number_of_passing_kmers))
+        sys.stdout.write("\twith entropy: {}\n".format(round(passing_entropy, 5)))
+    second_csf_be_size = estimate_csf_space(passing_entropy)
+    second_csf_bit_size = second_csf_be_size * total_number_of_passing_kmers
+    sys.stdout.write("Estimated size of second CSF: {} bits/element (= {} bits in total)\n".format(round(second_csf_be_size, 4), round(second_csf_bit_size, 2)))
+    total_bit_size = first_csf_bit_size + il_blf_bit_size + second_csf_bit_size
+    total_be_size = total_bit_size / total_number_of_kmers
+    sys.stdout.write("Total space = {} bits/element ({} bits in total)\n".format(round(total_be_size, 4), round(total_bit_size, 2)))
+
+def fil_main(args):
+    if not args.output and not args.result: return #No output required
+    if not args.minimizers: return
+    args.minimizers.sort()
+    gen = random.Random()
+    gen.seed(args.seed)
+    hasher = pyhash.xx_64(args.seed)
+    spectrum = kmer.Spectrum()
+    input_table = args.input
+    spectrum.addFromFile(input_table, args.sep)
+    nofk = spectrum.L0Norm()
+    if args.dbg: sys.stderr.write("Total number of k-mers: {}, with entropy: {}\n".format(nofk, spectrum.entropy()))
+    infos = list()
+    i = 0
+    while(not spectrum.empty()):
+        m = args.minimizers[i]
+        filtered_table = get_random_name("count.txt")
+        barray = MajorityBucketArray(math.inf)
+        number_of_kmers = 0
+        with open(input_table, "r") as ith:
+            for line in ith:#bucketing
+                km, count = line.split(args.sep)
+                mm = kmer.minimizer(m, km, hasher)
+                count = int(count)
+                barray.add(count, mm)
+                number_of_kmers += 1
+            barray.finalize()
+            ith.seek(0)
+            spectrum = kmer.Spectrum()
+            colliding_minimizers = set()
+            with open(filtered_table, "w") as oth:#filtering
+                for line in ith:
+                    km, count = line.split(args.sep)
+                    mm = kmer.minimizer(m, km, hasher)
+                    count = int(count)
+                    if(count != barray.buckets[mm]):#k-mer pass to the next layer
+                        spectrum.add(count)
+                        oth.write("{}{}{}\n".format(km, args.sep, count-barray.buckets[mm]))
+                        if args.dbg:
+                            colliding_minimizers.add(mm)
+            if(not spectrum.empty()):
+                alpha = (number_of_kmers - spectrum.L0Norm()) / number_of_kmers
+                if alpha > 1 or alpha < 0: raise RuntimeError("unbounded alpha: alpha = "+str(alpha))
+                epsilon = (1.0-alpha) / alpha
+                if epsilon > 1: epsilon = 1
+                if epsilon < 0: raise RuntimeError("epsilon < 0")
+                blf = bloom.BloomFilter(spectrum.L0Norm(), epsilon, gen, pyhash.xx_64)
+                with open(filtered_table, "r") as fth:
+                    for line in fth:
+                        km, _ = line.split(args.sep)
+                        blf.add(km)
+                ith.seek(0)
+                with open(filtered_table, "a") as fth:
+                    for line in ith: #ith is the original input table, do not change it!
+                        km, count = line.split(args.sep)
+                        mm = kmer.minimizer(m, km, hasher)
+                        count = int(count)
+                        if(count == barray.buckets[mm] and (km in blf)):
+                            fth.write("{}{}{}\n".format(km, args.sep, count-barray.buckets[mm]))
+                if args.output:
+                    blf.dump(args.output + ".m{}.bloom.txt".format(m))
+
+        bucket_spectrum = kmer.Spectrum()
+        bucket_table = args.output + ".m{}.txt".format(m) if args.output else get_random_name("m{}.txt".format(m))
+        with open(bucket_table, "w") as bth:#save bucket table
+            for mm, representative in barray.buckets.items():
+                bth.write("{}{}{}\n".format(mm, args.sep, representative))
+                bucket_spectrum.add(representative)
+        bfs, csfs, jvals, beps = csf_compress(bucket_table, args.output + ".m{}".format(m) if args.output else None, args.sep, args.seed, 1, bucket_spectrum)
+        bsize = bfs + csfs
+        if not args.keep: os.remove(bucket_table)
+        if not args.keep and input_table != args.input: os.remove(input_table)
+        input_table = filtered_table
+        infos.append((bsize, blf.getBytesMemory() if not spectrum.empty() else 0, alpha))
+        if args.dbg:
+            sys.stderr.write("Number of buckets for layer m={}: {}\n\tof which ambiguous: {}.\n\tentropy = {}\n\tepsilon = {}\n\tCSF majority values: {}\n\tbloom size = {} bytes\n\tcsf size = {} bytes\n".format(m, bucket_spectrum.L0Norm(), len(colliding_minimizers), bucket_spectrum.entropy(), beps, jvals, bfs, csfs))
+            if not spectrum.empty(): sys.stderr.write("inter-layer bloom filter:\n\tNumber of k-mers = {}\n\talpha = {}\n\tepsilon = {}\n\tsize = {} bits\n".format(spectrum.L0Norm(), alpha, epsilon, blf.getBytesMemory()*8))
+        i = i + 1
+    if input_table != args.input: os.remove(input_table)
+    total_size = 0
+    size_of_buckets = 0
+    final_table_size = 0
+    for ba_size, blf_size, _ in infos:
+        size_of_buckets += ba_size
+        total_size += ba_size + blf_size
+    if args.result:
+        with open(args.input, "r") as tbh: k = kmer.length(tbh, args.sep)
+        mmlengths = '-'.join(map(str, args.minimizers)) if args.minimizers else '0'
+        size_of_buckets_bits = size_of_buckets * 8 / nofk
+        final_table_size_bits = final_table_size * 8 / nofk
+        total_size_bpe = total_size * 8 / nofk
+        write_header = isempty(args.result)
+
+        with open(args.result, "a") as csvh:
+            if write_header: csvh.write("k,minimizers,delta,correct,opt_layers,majority,bloom_layers,buckets_size,blcsf_size,total_size\n")
+            csvh.write("{},{},{},{},{},{},{},{},{},{}\n".format(k, mmlengths, "inf", True, 1, True, 1, size_of_buckets_bits, final_table_size_bits, total_size_bpe))
+            #rh.write("{},{},{}\n".format(str(infos), total_size, total_size_bpe))
+            
 
 def main(args):
     if (args.command == "count"): return count_main(args)
+    elif (args.command == "pacount"): return countpa_main(args)
+    elif (args.command == "dfcount"): return countdf_main(args)
     elif (args.command == "histo"): return histo_main(args)
     elif (args.command == "csf"): return csf_main(args)
     elif (args.command == "zipfian"): return zipfian_main(args)
@@ -502,6 +731,8 @@ def main(args):
     elif (args.command == "build"): return build_main(args)
     elif (args.command == "xxhash"): return test_xxhash_main(args)
     elif (args.command == "ttest"): return test_speed_main(args)
+    elif (args.command == "mtest"): return test_mm_bucketing(args)
+    elif (args.command == "fil"): return fil_main(args)
     else: sys.stderr.write("-h to list available subcommands\n")
 
 def parser_init():
@@ -514,6 +745,16 @@ def parser_init():
     parser_count.add_argument("-i", help="input file (fasta or fastq) [stdin]", type=str)
     parser_count.add_argument("-o", help="output count table [stdout]", type=str)
     parser_count.add_argument("-k", help="k-mer length", type=int, required=True)
+
+    parser_countpa = subparsers.add_parser("pacount", help="Assign presence/absence to each k-mer")
+    parser_countpa.add_argument("--input", "-i", help="input files (fasta or fastq)", type=str, nargs='+', required=True)
+    parser_countpa.add_argument("--output", "-o", help="output count table, each k-mer has a number where its ith bit corresponds to the ith file in input [stdout]", type=str)
+    parser_countpa.add_argument("-k", help="k-mer length", type=int, required=True)
+
+    parser_countdf = subparsers.add_parser("dfcount", help="Count document frequency of each k-mer")
+    parser_countdf.add_argument("--input", "-i", help="input files (fasta or fastq)", type=str, nargs='+', required=True)
+    parser_countdf.add_argument("--output", "-o", help="output count table, with each k-mer having its df count [stdout]", type=str)
+    parser_countdf.add_argument("-k", help="k-mer length", type=int, required=True)
 
     parser_histo = subparsers.add_parser("histo", help="Compute histogram from k-mer counting table")
     parser_histo.add_argument("-i", help="counting table in input [stdin]", type=str)
@@ -567,6 +808,25 @@ def parser_init():
     parser_time_test.add_argument("--minimizers", "-m", help="minimizer list used for recursive bucketing", type=int, nargs='+', default=[])
     parser_time_test.add_argument("--sep", help="separator used to separate k-mers from counters in the input file [space]", type=str, default=' ')
     parser_time_test.add_argument("--seed", help="random seed [42]. ATTENTION: currently unused, using seeds different from 42 produce untestable results.", type=int, default=42)
+
+    parser_mm_bucketing = subparsers.add_parser("mtest", help="test minimizer bucketing statistics")
+    parser_mm_bucketing.add_argument("--input", "-i", help="counting table in input", type=str, required=True)
+    parser_mm_bucketing.add_argument("--dump", "-u", help="dump each bucket explicitly", type=str)
+    parser_mm_bucketing.add_argument("--minimizer", "-m", help="minimizer length used for bucketing", type=int, required=True)
+    parser_mm_bucketing.add_argument("--policy", "-p", help="bucketing policy {}".format(policies), type=str, required=True)
+    parser_mm_bucketing.add_argument("--sep", help="separator used to separate k-mers from counters in the input file [space]", type=str, default=' ')
+    parser_mm_bucketing.add_argument("--seed", help="random seed [42]", type=int, default=42)
+
+    parser_fil = subparsers.add_parser("fil", help="Compress a k-mer counting table")
+    parser_fil.add_argument("--input", "-i", help="counting table in input", type=str, required=True)
+    parser_fil.add_argument("--output", "-o", help="basename for all output files. You might want to use --result option if you don't need output files", type=str, required=False)
+    parser_fil.add_argument("--result", "-r", help="CSV file to append the results to", type=str, required=False)
+    parser_fil.add_argument("--minimizers", "-m", help="minimizer list to be used for recursive bucketing [0]", type=int, nargs='+', default=[])
+    parser_fil.add_argument("--sep", help="separator used to separate k-mers from counters in the input file [space]", type=str, default=' ')
+    parser_fil.add_argument("--seed", help="random seed [42]", type=int, default=42)
+    parser_fil.add_argument("--keep", help="keep all intermidiate files [disabled by default]", action="store_true")
+    parser_fil.add_argument("--logging", help="log additional information to file", type=str)
+    parser_fil.add_argument("--dbg", help="print everything for debugging", action="store_true")
 
     return parser
 

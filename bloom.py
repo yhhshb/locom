@@ -9,6 +9,8 @@ import random
 class BloomFilter:
 
     def __init__(self, N: int, epsilon: float, rndgen, hash_generator_x64):
+        assert(epsilon > 0)
+        assert(epsilon <=1)
         self.hashes = list()
         self.R = math.ceil(-math.log(epsilon, 2)) #number of hash functions
         self.seeds = [rndgen.randint(0, 2**31-1) for _ in range(self.R)]

@@ -23,12 +23,16 @@ def count(table: dict, k: int, seq: str, canonical: bool = True):
     if l < k: return
     for i in range(l - k + 1):
         kmer = seq[i:(i+k)]
-        if 'N' in kmer: continue
-        if(canonical):
-            kmer_rev = kmer.translate(comp_tab)[::-1]
-            if kmer > kmer_rev: kmer = kmer_rev
-        if kmer in table: table[kmer] += 1
-        else: table[kmer] = 1
+        ok = True
+        #if 'N' in kmer: continue
+        for c in kmer: 
+            if not (c in base_for): ok = False
+        if ok:
+            if(canonical):
+                kmer_rev = kmer.translate(comp_tab)[::-1]
+                if kmer > kmer_rev: kmer = kmer_rev
+            if kmer in table: table[kmer] += 1
+            else: table[kmer] = 1
 
 def length(obj, sep=' '):
     import io
