@@ -20,7 +20,7 @@ pwd = os.path.dirname(os.path.realpath(__file__))
 parent = os.path.dirname(pwd)
 
 GV3 = "Sux4JTest/target/Sux4JTest-0.0.1-jar-with-dependencies.jar"
-TT3 = "GV3/test_locom_speed"
+TT3 = "GV3/test_amb_speed"
 jar_exec = os.path.join(pwd, GV3)
 speed_exec = os.path.join(pwd, TT3)
 
@@ -52,13 +52,16 @@ policies = ["minimum", "majority"]
 
 def count_main(args):
     import gzip
-    if (args.i and args.i.endswith(".gz")): fd = gzip.open(args.i, "rt")
-    elif (args.i): fd = open(args.i, "r")
-    else: fd = sys.stdin
     table = dict()
-    for _, seq, _ in readfq(fd):
-        kmer.count(table, args.k, seq, False)
-    fd.close()
+    for f in args.i:
+        if f.endswith(".gz"): fd = gzip.open(f, "rt")
+        else: fd = open(f, "r")
+        for _, seq, _ in readfq(fd):
+            kmer.count(table, args.k, seq, False)
+        fd.close()
+    if not args.i:
+        for _, seq, _ in readfq(sys.stdin):
+            kmer.count(table, args.k, seq, False)
     if (args.o): fd = open(args.o, "w")
     else: fd = sys.stdout
     for k, v in table.items(): fd.write("{} {}\n".format(k, v))
@@ -455,7 +458,7 @@ def test_xxhash_main(args):
                 hvals = [str(hasher(km.encode())) for hasher in hashers]
                 toh.write(','.join(hvals) + '\n')
 
-def test_speed_main(args):
+def test_amb_speed_main(args):
     import io
     args.minimizers.sort()
 
@@ -657,7 +660,7 @@ def fil_main(args):
                     mm = kmer.minimizer(m, km, hasher)
                     count = int(count)
                     if(count != barray.buckets[mm]):#k-mer pass to the next layer
-                        spectrum.add(count)
+                        spectrum.add(count)#it makes no difference using count or the difference. We will use the L0 norm only (the L1 norm cannot be used because of negative differences)
                         oth.write("{}{}{}\n".format(km, args.sep, count-barray.buckets[mm]))
                         if args.dbg:
                             colliding_minimizers.add(mm)
@@ -730,7 +733,7 @@ def main(args):
     elif (args.command == "simulate"): return simulate_csf_main(args)
     elif (args.command == "build"): return build_main(args)
     elif (args.command == "xxhash"): return test_xxhash_main(args)
-    elif (args.command == "ttest"): return test_speed_main(args)
+    elif (args.command == "ambtest"): return test_amb_speed_main(args)
     elif (args.command == "mtest"): return test_mm_bucketing(args)
     elif (args.command == "fil"): return fil_main(args)
     else: sys.stderr.write("-h to list available subcommands\n")
@@ -741,8 +744,8 @@ def parser_init():
     parser.add_argument("__default")
     subparsers = parser.add_subparsers(dest="command")
 
-    parser_count = subparsers.add_parser("count", help="Count k-mers (can be replaced by KMC)")
-    parser_count.add_argument("-i", help="input file (fasta or fastq) [stdin]", type=str)
+    parser_count = subparsers.add_parser("count", help="Count k-mers from multiple files (can be replaced by KMC)")
+    parser_count.add_argument("-i", help="input files (fasta or fastq) [stdin]", type=str, nargs='+', default=[])
     parser_count.add_argument("-o", help="output count table [stdout]", type=str)
     parser_count.add_argument("-k", help="k-mer length", type=int, required=True)
 
@@ -800,7 +803,7 @@ def parser_init():
     parser_test_xxhash.add_argument("--seed", help="random seed [42]", type=int, nargs='+', required=True)
     parser_test_xxhash.add_argument("--sep", help="separator used to separate k-mers from counters in the input file [space]", type=str, default=' ')
 
-    parser_time_test = subparsers.add_parser("ttest", help="test compressed structure and measure time")
+    parser_time_test = subparsers.add_parser("ambtest", help="test AMB-compressed structure and measure time")
     parser_time_test.add_argument("--input", "-i", help="counting table in input", type=str, required=True)
     parser_time_test.add_argument("--output", "-o", help="basename for all output files given to the build command", type=str, required=False)
     parser_time_test.add_argument("--result", "-r", help="folder where to create a new folder named after the output to save all statistics", type=str, required=True)

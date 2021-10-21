@@ -4,7 +4,6 @@ Very simple implementation of a Bloom Filter in pure python.
 """ 
 
 import math
-import random
 
 class BloomFilter:
 
